@@ -1,0 +1,8 @@
+# Training + testing. Installs the runtime set, then the heavy extras.
+-r requirements.txt
+
+pandas==2.2.1
+shap==0.44.1
+
+pytest==8.1.1
+httpx==0.27.0

@@ -1,7 +1,6 @@
-# Serving + training. Nothing here is unused.
-# (Removed: python-jose, passlib, python-multipart, jinja2, weasyprint, reportlab,
-#  python-dateutil. They were never imported. The auth libs backed a JWT layer the
-#  README described but the code never implemented.)
+# Runtime only. shap and pandas are NOT here: SHAP is computed in closed form for
+# the linear model (see main.py), which keeps the deployed image inside a 512MB host.
+# A test asserts the closed-form values match shap.LinearExplainer exactly.
 
 fastapi==0.110.0
 uvicorn==0.27.1
@@ -9,16 +8,9 @@ pydantic==2.6.3
 python-dotenv==1.0.1
 
 numpy==1.26.4
-pandas==2.2.1
 scikit-learn==1.4.1.post1
 joblib==1.3.2
-shap==0.44.1
 
-# Tests
-pytest==8.1.1
-httpx==0.27.0
-
-# Auth (this time actually implemented, unlike the old README's claim)
 sqlalchemy==2.0.29
 passlib[bcrypt]==1.7.4
 bcrypt==4.0.1

@@ -212,10 +212,12 @@ def main() -> None:
             "Residence_type": RESIDENCE_MAP,
             "smoking_status": SMOKING_MAP,
         },
-        # A small background sample for SHAP explanations at serve time.
-        "shap_background": X_tr_s[
-            np.random.default_rng(RANDOM_STATE).choice(len(X_tr_s), 200, replace=False)
-        ],
+        # SHAP reference distribution. We keep the FULL scaled training set (the
+        # true reference distribution) and its exact mean. The API only needs the
+        # mean; the array is retained so a test can verify our closed-form values
+        # against shap.LinearExplainer using an identical reference.
+        "shap_background": X_tr_s,
+        "shap_expected": X_tr_s.mean(axis=0),
         "trained_at": datetime.now(timezone.utc).isoformat(),
         "n_train": int(len(X_tr)),
         "n_test": int(len(X_te)),

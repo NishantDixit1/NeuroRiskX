@@ -16,7 +16,9 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from main import ARTIFACT, PredictionInput, app  # noqa: E402
+import joblib  # noqa: E402
+
+from main import ARTIFACT, MODEL_PATH as ARTIFACT_PATH, PredictionInput, app  # noqa: E402
 
 client = TestClient(app)
 
@@ -223,3 +225,43 @@ def test_history_is_real_and_scoped_to_the_user():
     assert len(mine) == 2
     assert theirs == []  # user B must not see user A's assessments
     assert all(len(row["top_features"]) == 5 for row in mine)
+
+
+# ------------------- closed-form SHAP equals the shap library -------------------
+
+
+def test_closed_form_shap_matches_shap_library():
+    """
+    The API computes SHAP in closed form so that `shap` and `pandas` stay out of the
+    deployed image (it runs on a 512MB host). That optimisation is only honest if the
+    numbers are identical, so this pins them against the real library.
+    """
+    import numpy as np
+    import shap  # dev/test dependency only, never imported at runtime
+
+    background = joblib.load(ARTIFACT_PATH)["shap_background"]
+    # shap's Independent masker subsamples to 100 rows by default, which would use a
+    # different expected value than ours. Pin it to the identical reference set.
+    masker = shap.maskers.Independent(background, max_samples=len(background))
+    reference = shap.LinearExplainer(ARTIFACT.model, masker)
+
+    rng = np.random.default_rng(0)
+    for _ in range(25):
+        patient = PredictionInput(
+            age=int(rng.integers(20, 90)),
+            gender=str(rng.choice(["male", "female"])),
+            bmi=float(rng.uniform(16, 45)),
+            hypertension=bool(rng.integers(0, 2)),
+            heart_disease=bool(rng.integers(0, 2)),
+            ever_married=str(rng.choice(["yes", "no"])),
+            work_type=str(rng.choice(["private", "self-employed", "govt_job", "children", "never_worked"])),
+            residence_type=str(rng.choice(["urban", "rural"])),
+            avg_glucose_level=float(rng.uniform(60, 280)),
+            smoking_status=str(rng.choice(["formerly_smoked", "never_smoked", "smokes", "unknown"])),
+        )
+        scaled = ARTIFACT.scaler.transform(ARTIFACT.encode(patient))
+
+        ours = ARTIFACT.shap_values(scaled)
+        theirs = np.asarray(reference.shap_values(scaled)).reshape(-1)
+
+        np.testing.assert_allclose(ours, theirs, rtol=1e-9, atol=1e-9)

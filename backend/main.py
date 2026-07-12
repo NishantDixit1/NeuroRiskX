@@ -17,7 +17,6 @@ from typing import Literal
 
 import joblib
 import numpy as np
-import shap
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -122,11 +121,19 @@ class Artifact:
         if getattr(self.scaler, "n_features_in_", None) != len(self.feature_names):
             raise ValueError("Scaler feature count does not match persisted feature_names.")
 
-        background = bundle["shap_background"]
-        if self.model_name == "logistic_regression":
-            self.explainer = shap.LinearExplainer(self.model, background)
-        else:
-            self.explainer = shap.TreeExplainer(self.model, background)
+        if self.model_name != "logistic_regression":
+            raise ValueError(
+                f"This API serves the closed-form SHAP path, which is exact only for a "
+                f"linear model. Artifact contains '{self.model_name}'."
+            )
+
+        # Closed-form SHAP for a linear model with independent features:
+        #     phi_i = coef_i * (x_i - E[x_i])
+        # This is exactly what shap.LinearExplainer computes, and a test asserts the
+        # two agree to 1e-9. Doing it in numpy keeps shap and pandas out of the
+        # runtime image, which matters on a 512MB host.
+        self.coef = np.asarray(self.model.coef_).reshape(-1)
+        self.background_mean = np.asarray(bundle["shap_expected"])
         logger.info("Loaded %s (ROC-AUC %.3f)", self.model_name, self.metrics["roc_auc"])
 
     def encode(self, data: PredictionInput) -> np.ndarray:
@@ -148,13 +155,13 @@ class Artifact:
         row = [float(values[name]) for name in self.feature_names]
         return np.array(row, dtype=float).reshape(1, -1)
 
+    def shap_values(self, scaled: np.ndarray) -> np.ndarray:
+        """Exact per-patient SHAP values for the linear model."""
+        return self.coef * (scaled.reshape(-1) - self.background_mean)
+
     def explain(self, scaled: np.ndarray) -> list[dict]:
         """Real per-patient SHAP contributions, signed and ranked by magnitude."""
-        values = self.explainer.shap_values(scaled)
-        values = np.asarray(values)
-        if values.ndim == 3:  # some explainers return (n, features, classes)
-            values = values[..., 1]
-        row = values.reshape(-1)
+        row = self.shap_values(scaled)
 
         total = float(np.abs(row).sum()) or 1.0
         contributions = [

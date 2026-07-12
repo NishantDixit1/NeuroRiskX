@@ -13,9 +13,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Train the model at build time if the artifact was not committed. Keeps the image
-# self-contained and guarantees the served model matches this code.
-RUN test -f model/neuroriskx_model.joblib || python train_model.py
+# The trained artifact is committed, so the image needs no training deps (no pandas,
+# no shap). Fail loudly at build time rather than at runtime if it is ever missing.
+RUN test -f model/neuroriskx_model.joblib || (echo "Missing model artifact. Run train_model.py and commit it." && exit 1)
 
 EXPOSE 8000
 
