@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, JSON, String
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db import Base
@@ -42,7 +42,7 @@ class Assessment(Base):
 
     risk_score: Mapped[float] = mapped_column(Float, nullable=False)
     risk_band: Mapped[str] = mapped_column(String(16), nullable=False)
-    flagged: Mapped[bool] = mapped_column(Integer, nullable=False)
+    flagged: Mapped[bool] = mapped_column(Boolean, nullable=False)
 
     # The exact inputs and the explanation behind the score, so history is auditable.
     inputs: Mapped[dict] = mapped_column(JSON, nullable=False)
