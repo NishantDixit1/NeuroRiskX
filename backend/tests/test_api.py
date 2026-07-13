@@ -265,3 +265,47 @@ def test_closed_form_shap_matches_shap_library():
         theirs = np.asarray(reference.shap_values(scaled)).reshape(-1)
 
         np.testing.assert_allclose(ours, theirs, rtol=1e-9, atol=1e-9)
+
+
+# ----------------------------- what-if simulation -----------------------------
+
+
+def test_simulate_requires_auth():
+    assert client.post("/simulate", json=HEALTHY).status_code == 401
+
+
+def test_simulate_matches_predict_exactly(auth):
+    """A what-if run must be the real model, not an approximation of it."""
+    sim = client.post("/simulate", json=AT_RISK, headers=auth).json()
+    pred = client.post("/predict", json=AT_RISK, headers=auth).json()
+
+    assert sim["risk_score"] == pred["risk_score"]
+    assert sim["risk_band"] == pred["risk_band"]
+    assert sim["stroke_prediction"] == pred["stroke_prediction"]
+    assert sim["top_features"] == pred["top_features"]
+
+
+def test_simulate_does_not_pollute_history():
+    """
+    The whole point of /simulate: hypotheticals must not be written to history.
+    /history is a record of assessments the user actually took.
+    """
+    email = f"sim-{uuid4().hex[:10]}@example.com"
+    token = client.post("/auth/signup", json={"email": email, "password": "supersecret1"}).json()["access_token"]
+    h = {"Authorization": f"Bearer {token}"}
+
+    client.post("/predict", json=AT_RISK, headers=h)          # 1 real assessment
+    for _ in range(5):                                        # 5 what-if runs
+        client.post("/simulate", json=HEALTHY, headers=h)
+
+    history = client.get("/history", headers=h).json()
+    assert len(history) == 1, "simulations must not be persisted"
+
+
+def test_simulate_reflects_a_real_change(auth):
+    """Quitting smoking must actually move the score, via the real model."""
+    smoker = client.post("/simulate", json=AT_RISK, headers=auth).json()
+    quit_smoking = client.post(
+        "/simulate", json={**AT_RISK, "smoking_status": "never_smoked"}, headers=auth
+    ).json()
+    assert quit_smoking["risk_score"] < smoker["risk_score"]

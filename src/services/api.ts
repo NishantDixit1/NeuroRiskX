@@ -96,26 +96,50 @@ export const authService = {
   },
 };
 
+interface PredictionPayload {
+  risk_score: number;
+  risk_band: RiskBand;
+  stroke_prediction: boolean;
+  decision_threshold: number;
+  model_roc_auc: number;
+  top_features: FeatureContribution[];
+  recommendations: string[];
+  inputs: { age: number; gender: string; bmi: number; avg_glucose_level: number };
+  disclaimer: string;
+}
+
+function mapPrediction(data: PredictionPayload): PredictionResult {
+  return {
+    riskScore: data.risk_score,
+    riskBand: data.risk_band,
+    strokePrediction: data.stroke_prediction,
+    decisionThreshold: data.decision_threshold,
+    modelRocAuc: data.model_roc_auc,
+    topFeatures: data.top_features,
+    recommendations: data.recommendations,
+    inputs: {
+      age: data.inputs.age,
+      gender: data.inputs.gender,
+      bmi: data.inputs.bmi,
+      avgGlucoseLevel: data.inputs.avg_glucose_level,
+    },
+    disclaimer: data.disclaimer,
+  };
+}
+
 export const predictionService = {
   async getPrediction(patientData: PatientData): Promise<PredictionResult> {
-    const { data } = await api.post('/predict', toApiPayload(patientData));
+    const { data } = await api.post<PredictionPayload>('/predict', toApiPayload(patientData));
+    return mapPrediction(data);
+  },
 
-    return {
-      riskScore: data.risk_score,
-      riskBand: data.risk_band,
-      strokePrediction: data.stroke_prediction,
-      decisionThreshold: data.decision_threshold,
-      modelRocAuc: data.model_roc_auc,
-      topFeatures: data.top_features,
-      recommendations: data.recommendations,
-      inputs: {
-        age: data.inputs.age,
-        gender: data.inputs.gender,
-        bmi: data.inputs.bmi,
-        avgGlucoseLevel: data.inputs.avg_glucose_level,
-      },
-      disclaimer: data.disclaimer,
-    };
+  /**
+   * A what-if run. Identical scoring to /predict, but the server does not persist it,
+   * so exploring hypotheticals never pollutes the user's real assessment history.
+   */
+  async simulate(patientData: PatientData): Promise<PredictionResult> {
+    const { data } = await api.post<PredictionPayload>('/simulate', toApiPayload(patientData));
+    return mapPrediction(data);
   },
 
   /** Model facts come from the server, so the UI never quotes a stale ROC-AUC. */

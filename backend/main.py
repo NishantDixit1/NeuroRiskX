@@ -319,6 +319,58 @@ async def model_info():
     }
 
 
+def score_patient(data: PredictionInput) -> tuple[dict, float, str, list, bool]:
+    """
+    Score one patient. Shared by /predict and /simulate so a what-if run can never
+    diverge from the real thing: same model, same encoding, same SHAP.
+    """
+    features = ARTIFACT.encode(data)
+    scaled = ARTIFACT.scaler.transform(features)
+    score = float(ARTIFACT.model.predict_proba(scaled)[0][1])
+    band = band_for(score, ARTIFACT.bands, ARTIFACT.threshold)
+    top_features = ARTIFACT.explain(scaled)
+    flagged = score >= ARTIFACT.threshold
+
+    body = {
+        "risk_score": round(score * 100, 1),
+        "risk_band": band,
+        "stroke_prediction": flagged,
+        "decision_threshold": round(ARTIFACT.threshold * 100, 1),
+        "model_roc_auc": round(ARTIFACT.metrics["roc_auc"], 3),
+        "top_features": top_features,
+        "recommendations": build_recommendations(data, band),
+        "inputs": {
+            "age": data.age,
+            "gender": data.gender,
+            "bmi": data.bmi,
+            "avg_glucose_level": data.avg_glucose_level,
+        },
+        "disclaimer": DISCLAIMER,
+    }
+    return body, score, band, top_features, flagged
+
+
+@app.post("/simulate")
+async def simulate(data: PredictionInput, user: User = Depends(get_current_user)):
+    """
+    A what-if run: identical scoring to /predict, but nothing is persisted.
+
+    The UI lets you ask "what if I quit smoking?" and re-scores live. Those are
+    hypotheticals, not assessments the user actually took, so writing them to
+    history would pollute the very record /history exists to keep honest.
+    """
+    if ARTIFACT is None:
+        raise HTTPException(status_code=503, detail="Model not loaded.")
+    try:
+        body, *_ = score_patient(data)
+        return body
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Simulation failed")
+        raise HTTPException(status_code=500, detail="Simulation failed.")
+
+
 @app.post("/predict")
 async def predict(
     data: PredictionInput,
@@ -329,12 +381,7 @@ async def predict(
         raise HTTPException(status_code=503, detail="Model not loaded.")
 
     try:
-        features = ARTIFACT.encode(data)
-        scaled = ARTIFACT.scaler.transform(features)
-        score = float(ARTIFACT.model.predict_proba(scaled)[0][1])
-        band = band_for(score, ARTIFACT.bands, ARTIFACT.threshold)
-        top_features = ARTIFACT.explain(scaled)
-        flagged = score >= ARTIFACT.threshold
+        body, score, band, top_features, flagged = score_patient(data)
 
         # Persist so the user has a real history to look back on.
         db.add(
@@ -349,22 +396,7 @@ async def predict(
         )
         db.commit()
 
-        return {
-            "risk_score": round(score * 100, 1),      # model score, 0-100
-            "risk_band": band,                        # low | moderate | high
-            "stroke_prediction": flagged,
-            "decision_threshold": round(ARTIFACT.threshold * 100, 1),
-            "model_roc_auc": round(ARTIFACT.metrics["roc_auc"], 3),
-            "top_features": top_features,
-            "recommendations": build_recommendations(data, band),
-            "inputs": {
-                "age": data.age,
-                "gender": data.gender,
-                "bmi": data.bmi,
-                "avg_glucose_level": data.avg_glucose_level,
-            },
-            "disclaimer": DISCLAIMER,
-        }
+        return body
     except HTTPException:
         raise
     except Exception:
