@@ -1,0 +1,25 @@
+# The API is on a free tier that sleeps after 15 minutes of inactivity, and waking it
+# takes the better part of a minute. This is a demo people are sent links to, so the
+# first visitor should not be the one who pays that cost. A ping every 10 minutes keeps
+# the instance up.
+#
+# GitHub skips scheduled runs under load, so this is best effort. The frontend survives
+# a cold start regardless: the API client waits 90 seconds, and the hero card says the
+# service is waking rather than claiming it is unreachable.
+name: Keep the API warm
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping the health endpoint
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 120 \
+            https://neuroriskx-api.onrender.com/health)
+          echo "health -> $code"
+          test "$code" = "200"

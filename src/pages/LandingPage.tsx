@@ -67,9 +67,17 @@ const BAND_LABEL: Record<RiskBand, string> = {
 function LiveExplanationCard() {
   const [result, setResult] = useState<PredictionResult | null>(null);
   const [failed, setFailed] = useState(false);
+  const [slow, setSlow] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
+
+    // The API sleeps on its free tier. If it is cold, this card is the first thing
+    // waiting on it, so say so rather than spin silently and look broken.
+    const slowTimer = setTimeout(() => {
+      if (!cancelled) setSlow(true);
+    }, 4000);
+
     predictionService
       .getDemoPatient()
       .then((patient) => predictionService.simulate(patient))
@@ -79,8 +87,10 @@ function LiveExplanationCard() {
       .catch(() => {
         if (!cancelled) setFailed(true);
       });
+
     return () => {
       cancelled = true;
+      clearTimeout(slowTimer);
     };
   }, []);
 
@@ -103,6 +113,11 @@ function LiveExplanationCard() {
           <Loader2 className="h-4 w-4 animate-spin text-blue-600" aria-hidden="true" />
           Scoring a real patient through the model
         </div>
+        {slow && (
+          <p className="mt-2 font-mono text-[11px] leading-relaxed text-gray-400">
+            The scoring service sleeps when idle. Waking it can take up to a minute.
+          </p>
+        )}
         <div className="mt-6 space-y-3" aria-hidden="true">
           <div className="h-10 w-28 animate-pulse rounded bg-gray-100" />
           <div className="h-2 w-full animate-pulse rounded-full bg-gray-100" />

@@ -31,7 +31,10 @@ export const tokenStore = {
 const api = axios.create({
   baseURL: API_BASE_URL,
   headers: { 'Content-Type': 'application/json' },
-  timeout: 20000,
+  // The API runs on a free tier that sleeps after inactivity, and a cold start takes
+  // the better part of a minute. At 20s the first visitor of the day would time out
+  // and be told the service was unreachable, when it was only waking up.
+  timeout: 90000,
 });
 
 // Attach the bearer token to every request that has one.
