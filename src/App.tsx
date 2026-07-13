@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   BrowserRouter,
   Link,
@@ -8,15 +8,17 @@ import {
   useLocation,
   useNavigate,
 } from 'react-router-dom';
-import { Brain, History, LogOut, Stethoscope } from 'lucide-react';
+import { AlertCircle, Brain, History, LogOut, Stethoscope } from 'lucide-react';
 
 import { AssessmentPage } from './pages/AssessmentPage';
 import { HistoryPage } from './pages/HistoryPage';
 import LandingPage from './pages/LandingPage';
 import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
+import { predictionService } from './services/api';
 import { useAuthStore } from './store/useAuthStore';
 import { useStore } from './store/useStore';
+import { Assessment } from './types';
 
 const FullPageSpinner = () => (
   <div className="flex min-h-screen items-center justify-center bg-gray-50">
@@ -142,6 +144,61 @@ const SignupRoute = () => {
   );
 };
 
+/** Fetches the user's real saved assessments and hands them to the page as props. */
+const HistoryRoute = () => {
+  const navigate = useNavigate();
+  const [assessments, setAssessments] = useState<Assessment[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    setIsLoading(true);
+    setError(null);
+    predictionService
+      .getHistory()
+      .then((rows) => {
+        setAssessments(rows);
+        setIsLoading(false);
+      })
+      .catch(() => {
+        setError('Could not load your history. Please try again.');
+        setIsLoading(false);
+      });
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  if (error) {
+    return (
+      <div
+        role="alert"
+        className="flex items-start gap-2.5 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800"
+      >
+        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+        <p>
+          {error}{' '}
+          <button
+            onClick={load}
+            className="rounded font-semibold underline underline-offset-2 hover:text-rose-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-600"
+          >
+            Retry
+          </button>
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <HistoryPage
+      assessments={assessments}
+      isLoading={isLoading}
+      onStartAssessment={() => navigate('/assess')}
+    />
+  );
+};
+
 const LandingRoute = () => {
   const navigate = useNavigate();
   return (
@@ -195,7 +252,7 @@ function App() {
           element={
             <RequireAuth>
               <AppLayout>
-                <HistoryPage />
+                <HistoryRoute />
               </AppLayout>
             </RequireAuth>
           }
