@@ -270,8 +270,46 @@ def test_closed_form_shap_matches_shap_library():
 # ----------------------------- what-if simulation -----------------------------
 
 
-def test_simulate_requires_auth():
-    assert client.post("/simulate", json=HEALTHY).status_code == 401
+def test_simulate_is_public():
+    """
+    Deliberately open. It is the public demo's scoring engine: a visitor must be
+    able to see what the model says before being asked to create an account.
+    Safe because it reads no user data and writes no row.
+    """
+    assert client.post("/simulate", json=HEALTHY).status_code == 200
+
+
+def test_predict_still_requires_auth():
+    """The counterpart to the above: the endpoint that *saves* stays protected."""
+    assert client.post("/predict", json=HEALTHY).status_code == 401
+
+
+def test_anonymous_simulate_writes_nothing(auth):
+    """
+    Opening /simulate must not open a hole into the database. An anonymous run
+    must leave the signed-in user's history untouched.
+    """
+    before = len(client.get("/history", headers=auth).json())
+    for _ in range(5):
+        assert client.post("/simulate", json=AT_RISK).status_code == 200  # no headers
+    after = client.get("/history", headers=auth).json()
+    assert len(after) == before, "anonymous simulations must not be persisted"
+
+
+def test_public_simulate_matches_authenticated_simulate():
+    """A visitor and a signed-in user must get the identical score. No crippled demo."""
+    anon = client.post("/simulate", json=AT_RISK).json()
+
+    email = f"anon-{uuid4().hex[:10]}@example.com"
+    token = client.post(
+        "/auth/signup", json={"email": email, "password": "supersecret1"}
+    ).json()["access_token"]
+    authed = client.post(
+        "/simulate", json=AT_RISK, headers={"Authorization": f"Bearer {token}"}
+    ).json()
+
+    assert anon["risk_score"] == authed["risk_score"]
+    assert anon["top_features"] == authed["top_features"]
 
 
 def test_simulate_matches_predict_exactly(auth):
@@ -309,3 +347,85 @@ def test_simulate_reflects_a_real_change(auth):
         "/simulate", json={**AT_RISK, "smoking_status": "never_smoked"}, headers=auth
     ).json()
     assert quit_smoking["risk_score"] < smoker["risk_score"]
+
+
+# ------------------------- public demo, distributions, threshold -------------------------
+
+
+def test_demo_patient_is_public_and_scoreable():
+    """
+    The public demo's sample must be a real, valid patient the API will actually score.
+    If /demo-patient ever drifts from PredictionInput, this fails instead of the demo.
+    """
+    r = client.get("/demo-patient")
+    assert r.status_code == 200
+    patient = r.json()
+
+    assert patient["source"] == "held-out test set (never seen during training)"
+
+    scored = client.post("/simulate", json={k: v for k, v in patient.items() if k != "source"})
+    assert scored.status_code == 200, scored.text
+    assert scored.json()["risk_score"] > 0
+
+
+def test_demo_patient_has_something_to_simulate():
+    """
+    A demo where no slider changes anything is a broken demo. The chosen record must
+    carry factors the what-if panel can actually act on.
+    """
+    p = client.get("/demo-patient").json()
+    modifiable = sum(
+        (
+            p["hypertension"],
+            p["heart_disease"],
+            p["smoking_status"] == "smokes",
+            p["bmi"] >= 30.0,
+            p["avg_glucose_level"] >= 126.0,
+        )
+    )
+    assert modifiable >= 2, f"demo patient has only {modifiable} modifiable factors"
+
+
+def test_percentiles_are_measured_against_the_training_data():
+    """Percentiles must come from the real distribution, not a hardcoded cutoff."""
+    body = client.post("/simulate", json=AT_RISK).json()
+    pct = body["percentiles"]
+    assert set(pct) == {"age", "bmi", "avg_glucose_level"}
+    for value in pct.values():
+        assert 0.0 <= value <= 100.0
+
+    # An extreme patient must sit near the top; a mild one much lower.
+    high = client.post("/simulate", json={**AT_RISK, "bmi": 55.0}).json()["percentiles"]["bmi"]
+    low = client.post("/simulate", json={**AT_RISK, "bmi": 18.0}).json()["percentiles"]["bmi"]
+    assert high > low
+    assert high > 95.0
+
+
+def test_threshold_curve_shows_the_real_tradeoff():
+    """Lowering the threshold must catch more and flag more. That is the whole point."""
+    r = client.get("/threshold-curve")
+    assert r.status_code == 200
+    body = r.json()
+    points = body["points"]
+    assert len(points) == 101
+
+    # Recall and flagged_rate are both monotonically non-increasing in the threshold.
+    recalls = [p["recall"] for p in points]
+    flagged = [p["flagged_rate"] for p in points]
+    assert all(a >= b for a, b in zip(recalls, recalls[1:]))
+    assert all(a >= b for a, b in zip(flagged, flagged[1:]))
+
+    # The threshold the model actually ships with must appear on the curve it draws.
+    assert 0.0 < body["selected_threshold"] < 1.0
+
+
+def test_distributions_are_served_for_the_continuous_features():
+    r = client.get("/distributions")
+    assert r.status_code == 200
+    body = r.json()
+    assert set(body) == {"age", "bmi", "avg_glucose_level"}
+    for feature in body.values():
+        hist = feature["histogram"]
+        assert len(hist["edges"]) == len(hist["counts"]) + 1
+        assert sum(hist["counts"]) > 0
+        assert feature["min"] < feature["max"]

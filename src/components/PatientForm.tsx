@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import {
   AlertCircle,
@@ -18,6 +18,10 @@ interface PatientFormProps {
   isLoading: boolean;
   error: string | null;
   onDismissError: () => void;
+  /** Prefills the form. The public demo passes the real held-out record it scores. */
+  initialValues?: PatientData | null;
+  /** Overrides the submit button's label, e.g. "Score this patient" in the demo. */
+  submitLabel?: string;
 }
 
 /**
@@ -119,18 +123,39 @@ const SectionHeader: React.FC<{
   </div>
 );
 
+/** Booleans arrive as booleans, but the radio group's form model speaks strings. */
+function toFormValues(data: PatientData): FormValues {
+  return {
+    ...data,
+    hypertension: data.hypertension ? 'true' : 'false',
+    heartDisease: data.heartDisease ? 'true' : 'false',
+  };
+}
+
 export const PatientForm: React.FC<PatientFormProps> = ({
   onSubmit,
   isLoading,
   error,
   onDismissError,
+  initialValues = null,
+  submitLabel,
 }) => {
   const {
     register,
     handleSubmit,
     watch,
+    reset,
     formState: { errors },
-  } = useForm<FormValues>({ mode: 'onTouched' });
+  } = useForm<FormValues>({
+    mode: 'onTouched',
+    defaultValues: initialValues ? toFormValues(initialValues) : undefined,
+  });
+
+  // The demo fetches its patient from the API, so the values usually land after the
+  // first render. defaultValues alone would miss them.
+  useEffect(() => {
+    if (initialValues) reset(toFormValues(initialValues));
+  }, [initialValues, reset]);
 
   const watched = watch();
   const isFilled = (key: keyof FormValues) => {
@@ -486,7 +511,7 @@ export const PatientForm: React.FC<PatientFormProps> = ({
                 </>
               ) : (
                 <>
-                  Get my risk score
+                  {submitLabel ?? 'Get my risk score'}
                   <ArrowRight className="h-4 w-4" aria-hidden="true" />
                 </>
               )}

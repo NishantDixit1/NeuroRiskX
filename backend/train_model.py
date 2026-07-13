@@ -194,10 +194,101 @@ def main() -> None:
         "positive_rate": round(float(y.mean()), 4),
     }
 
+    # Reverse the categorical maps so a raw feature row can be turned back into the
+    # string values the API accepts.
+    inverse = {
+        col: {code: name for name, code in mapping.items()}
+        for col, mapping in (
+            ("gender", GENDER_MAP),
+            ("ever_married", EVER_MARRIED_MAP),
+            ("work_type", WORK_TYPE_MAP),
+            ("Residence_type", RESIDENCE_MAP),
+            ("smoking_status", SMOKING_MAP),
+        )
+    }
+    col = {name: i for i, name in enumerate(FEATURE_NAMES)}
+
+    # A sample patient for the public demo. Inventing one would mean shipping made-up
+    # numbers, so instead we take a real record out of the HELD-OUT test set: a patient
+    # the model never saw while training. Chosen deterministically as the flagged test
+    # record carrying the most factors a person could actually change, so the what-if
+    # panel has something to work with. Ties break on index, so this is reproducible.
+    test_scores = model.predict_proba(X_te_s)[:, 1]
+
+    def modifiable_factors(row: np.ndarray) -> int:
+        return sum(
+            (
+                row[col["hypertension"]] == 1,
+                row[col["heart_disease"]] == 1,
+                row[col["smoking_status"]] == SMOKING_MAP["smokes"],
+                row[col["bmi"]] >= 30.0,
+                row[col["avg_glucose_level"]] >= 126.0,
+            )
+        )
+
+    flagged_rows = np.flatnonzero(test_scores >= best["threshold"])
+    demo_i = int(
+        sorted(flagged_rows, key=lambda i: (-modifiable_factors(X_te[i]), int(i)))[0]
+    )
+    demo_row = X_te[demo_i]
+    demo_patient = {
+        "gender": inverse["gender"][int(demo_row[col["gender"]])],
+        "age": int(round(float(demo_row[col["age"]]))),
+        "hypertension": bool(demo_row[col["hypertension"]]),
+        "heart_disease": bool(demo_row[col["heart_disease"]]),
+        "ever_married": inverse["ever_married"][int(demo_row[col["ever_married"]])],
+        "work_type": inverse["work_type"][int(demo_row[col["work_type"]])],
+        "residence_type": inverse["Residence_type"][int(demo_row[col["Residence_type"]])],
+        "avg_glucose_level": float(demo_row[col["avg_glucose_level"]]),
+        "bmi": float(demo_row[col["bmi"]]),
+        "smoking_status": inverse["smoking_status"][int(demo_row[col["smoking_status"]])],
+        # Stated so the UI can say where it came from instead of calling it "a patient".
+        "source": "held-out test set (never seen during training)",
+    }
+    print(
+        f"Demo patient: test row {demo_i}, score {test_scores[demo_i]:.3f}, "
+        f"{modifiable_factors(demo_row)} modifiable factors"
+    )
+
+    # The training distribution of each continuous feature, so the UI can answer
+    # "is a glucose of 220 actually high?" from the data rather than from a threshold
+    # somebody typed into a component. We ship the raw training column; the API turns
+    # it into an exact percentile for whatever patient it is scoring.
+    distributions = {
+        name: {
+            "values": X_tr[:, col[name]].round(2).tolist(),
+            "min": float(X_tr[:, col[name]].min()),
+            "max": float(X_tr[:, col[name]].max()),
+            "mean": float(X_tr[:, col[name]].mean()),
+            "median": float(np.median(X_tr[:, col[name]])),
+        }
+        for name in ("age", "bmi", "avg_glucose_level")
+    }
+
+    # How the decision threshold trades recall against precision, measured on the
+    # held-out test set. This is what lets the UI show the trade-off honestly: moving
+    # the threshold down catches more strokes and raises more false alarms, and here
+    # are the actual numbers for both.
+    grid = np.linspace(0.0, 1.0, 101)
+    threshold_curve = []
+    for t in grid:
+        preds = (test_scores >= t).astype(int)
+        threshold_curve.append(
+            {
+                "threshold": round(float(t), 2),
+                "recall": round(float(recall_score(y_te, preds, zero_division=0)), 4),
+                "precision": round(float(precision_score(y_te, preds, zero_division=0)), 4),
+                "flagged_rate": round(float(preds.mean()), 4),
+            }
+        )
+
     artifact = {
         "model": model,
         "scaler": scaler,
         "feature_names": FEATURE_NAMES,
+        "demo_patient": demo_patient,
+        "distributions": distributions,
+        "threshold_curve": threshold_curve,
         "threshold": best["threshold"],
         "bands": {"moderate": band_moderate, "high": band_high},
         "metrics": {k: v for k, v in best.items() if k != "name"},

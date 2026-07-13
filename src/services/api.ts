@@ -2,11 +2,15 @@ import axios from 'axios';
 import {
   Assessment,
   AuthResponse,
+  DemoPatient,
+  Distribution,
+  Distributions,
   FeatureContribution,
   ModelInfo,
   PatientData,
   PredictionResult,
   RiskBand,
+  ThresholdCurve,
   User,
 } from '../types';
 
@@ -105,7 +109,24 @@ interface PredictionPayload {
   top_features: FeatureContribution[];
   recommendations: string[];
   inputs: { age: number; gender: string; bmi: number; avg_glucose_level: number };
+  percentiles: { age: number; bmi: number; avg_glucose_level: number };
   disclaimer: string;
+}
+
+interface DistributionPayload {
+  label: string;
+  min: number;
+  max: number;
+  mean: number;
+  median: number;
+  histogram: { counts: number[]; edges: number[] };
+}
+
+interface ThresholdPointPayload {
+  threshold: number;
+  recall: number;
+  precision: number;
+  flagged_rate: number;
 }
 
 function mapPrediction(data: PredictionPayload): PredictionResult {
@@ -122,6 +143,11 @@ function mapPrediction(data: PredictionPayload): PredictionResult {
       gender: data.inputs.gender,
       bmi: data.inputs.bmi,
       avgGlucoseLevel: data.inputs.avg_glucose_level,
+    },
+    percentiles: {
+      age: data.percentiles.age,
+      bmi: data.percentiles.bmi,
+      avgGlucoseLevel: data.percentiles.avg_glucose_level,
     },
     disclaimer: data.disclaimer,
   };
@@ -175,5 +201,61 @@ export const predictionService = {
       topFeatures: a.top_features,
       createdAt: a.created_at,
     }));
+  },
+
+  /**
+   * The sample the public demo scores: a real record from the held-out test set,
+   * chosen at training time. Public, like /simulate, so a visitor can see what the
+   * model does before being asked to create an account.
+   */
+  async getDemoPatient(): Promise<DemoPatient> {
+    const { data } = await api.get('/demo-patient');
+    return {
+      age: data.age,
+      gender: data.gender,
+      bmi: data.bmi,
+      hypertension: data.hypertension,
+      heartDisease: data.heart_disease,
+      everMarried: data.ever_married,
+      workType: data.work_type,
+      residenceType: data.residence_type,
+      avgGlucoseLevel: data.avg_glucose_level,
+      smokingStatus: data.smoking_status,
+      source: data.source,
+    };
+  },
+
+  /** The real training distributions, so the UI can place a patient in the population. */
+  async getDistributions(): Promise<Distributions> {
+    const { data } = await api.get('/distributions');
+    const map = (d: DistributionPayload): Distribution => ({
+      label: d.label,
+      min: d.min,
+      max: d.max,
+      mean: d.mean,
+      median: d.median,
+      histogram: { counts: d.histogram.counts, edges: d.histogram.edges },
+    });
+    return {
+      age: map(data.age),
+      bmi: map(data.bmi),
+      avgGlucoseLevel: map(data.avg_glucose_level),
+    };
+  },
+
+  /** Recall vs precision at every threshold, measured on the held-out test set. */
+  async getThresholdCurve(): Promise<ThresholdCurve> {
+    const { data } = await api.get('/threshold-curve');
+    return {
+      points: data.points.map((p: ThresholdPointPayload) => ({
+        threshold: p.threshold,
+        recall: p.recall,
+        precision: p.precision,
+        flaggedRate: p.flagged_rate,
+      })),
+      selectedThreshold: data.selected_threshold,
+      selectionRule: data.selection_rule,
+      nTest: data.n_test,
+    };
   },
 };

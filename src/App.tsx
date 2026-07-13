@@ -8,7 +8,7 @@ import {
   useLocation,
   useNavigate,
 } from 'react-router-dom';
-import { AlertCircle, Brain, History, LogOut, Stethoscope } from 'lucide-react';
+import { AlertCircle, ArrowRight, Brain, History, LogOut, Stethoscope } from 'lucide-react';
 
 import { AssessmentPage } from './pages/AssessmentPage';
 import { HistoryPage } from './pages/HistoryPage';
@@ -205,7 +205,93 @@ const LandingRoute = () => {
     <LandingPage
       onGetStarted={() => navigate('/signup')}
       onLogin={() => navigate('/login')}
+      onTryDemo={() => navigate('/demo')}
     />
+  );
+};
+
+/**
+ * The public demo. Scores through /simulate, so a visitor gets the real model, the
+ * real SHAP explanation and the working what-if panel without an account and without
+ * writing a row. Signing up is what you do to *save* a result, not to see one.
+ */
+const DemoRoute = () => {
+  const navigate = useNavigate();
+  const resetAssessment = useStore((s) => s.reset);
+  const clearResult = useStore((s) => s.clearResult);
+
+  // A result left over from an earlier assessment must not greet a demo visitor.
+  useEffect(() => {
+    resetAssessment();
+  }, [resetAssessment]);
+
+  const leave = (to: string) => {
+    resetAssessment();
+    navigate(to);
+  };
+
+  // Signing up keeps what they typed, so the real intake is prefilled and one click
+  // saves it. Only the demo's unsaved result is dropped.
+  const saveToHistory = () => {
+    clearResult();
+    navigate('/signup');
+  };
+
+  const callout = (
+    <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-blue-200 bg-blue-50 px-5 py-4">
+      <p className="text-sm text-blue-900">
+        This run was scored by the live model but not saved. Create an account to keep
+        your assessments and track them over time.
+      </p>
+      <button
+        type="button"
+        onClick={saveToHistory}
+        className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2"
+      >
+        Save this to my history
+        <ArrowRight className="h-4 w-4" aria-hidden="true" />
+      </button>
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50">
+      <header className="border-b border-gray-200 bg-white">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3 sm:px-6 lg:px-8">
+          <button
+            type="button"
+            onClick={() => leave('/')}
+            className="flex items-center gap-2.5 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
+          >
+            <Brain className="h-7 w-7 text-blue-600" />
+            <span className="text-lg font-bold text-gray-900">NeuroRiskX</span>
+          </button>
+
+          <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 font-mono text-[11px] text-blue-700">
+            demo, nothing saved
+          </span>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => leave('/login')}
+              className="rounded-lg px-3 py-2 text-sm font-medium text-gray-600 hover:text-gray-900"
+            >
+              Log in
+            </button>
+            <button
+              onClick={() => leave('/signup')}
+              className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+            >
+              Create account
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+        <AssessmentPage demo demoCallout={callout} />
+      </main>
+    </div>
   );
 };
 
@@ -221,6 +307,7 @@ function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<LandingRoute />} />
+        <Route path="/demo" element={<DemoRoute />} />
         <Route
           path="/login"
           element={

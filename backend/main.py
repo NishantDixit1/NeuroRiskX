@@ -102,8 +102,39 @@ class PredictionInput(BaseModel):
 class Artifact:
     """Loaded model bundle. Everything the API needs comes from here."""
 
+    # Everything the API reads out of the bundle. Checked up front so an artifact
+    # built by an older train_model.py fails with a sentence instead of a KeyError
+    # thrown from somewhere deep in a request.
+    REQUIRED_KEYS = (
+        "model",
+        "scaler",
+        "feature_names",
+        "threshold",
+        "bands",
+        "metrics",
+        "model_name",
+        "model_label",
+        "explainer",
+        "dataset",
+        "encoders",
+        "trained_at",
+        "shap_expected",
+        "n_test",
+        "demo_patient",
+        "distributions",
+        "threshold_curve",
+    )
+
     def __init__(self, path: Path):
         bundle = joblib.load(path)
+
+        missing = [key for key in self.REQUIRED_KEYS if key not in bundle]
+        if missing:
+            raise ValueError(
+                f"Model artifact at {path} is missing {', '.join(missing)}. "
+                f"It was built by an older train_model.py. Re-run it."
+            )
+
         self.model = bundle["model"]
         self.scaler = bundle["scaler"]
         self.feature_names: list[str] = bundle["feature_names"]
@@ -116,6 +147,22 @@ class Artifact:
         self.dataset: dict = bundle["dataset"]
         self.encoders: dict = bundle["encoders"]
         self.trained_at: str = bundle["trained_at"]
+        self.demo_patient: dict = bundle["demo_patient"]
+        self.threshold_curve: list = bundle["threshold_curve"]
+        self.n_test: int = bundle["n_test"]
+
+        # Training distributions, sorted once at load so a patient's percentile is a
+        # binary search rather than a scan on every request.
+        self.distributions: dict = {
+            name: {
+                "sorted": np.sort(np.asarray(d["values"], dtype=float)),
+                "min": d["min"],
+                "max": d["max"],
+                "mean": d["mean"],
+                "median": d["median"],
+            }
+            for name, d in bundle["distributions"].items()
+        }
 
         # Guard: the scaler must expect exactly the features we say we send.
         if getattr(self.scaler, "n_features_in_", None) != len(self.feature_names):
@@ -135,6 +182,24 @@ class Artifact:
         self.coef = np.asarray(self.model.coef_).reshape(-1)
         self.background_mean = np.asarray(bundle["shap_expected"])
         logger.info("Loaded %s (ROC-AUC %.3f)", self.model_name, self.metrics["roc_auc"])
+
+    def percentile_of(self, feature: str, value: float) -> float:
+        """
+        Where this patient sits in the training population, as a percentile.
+
+        Measured against the real distribution, so the UI can say "higher than 94% of
+        the people in the dataset" rather than compare against a cutoff somebody typed
+        into a component.
+        """
+        values = self.distributions[feature]["sorted"]
+        rank = int(np.searchsorted(values, value, side="right"))
+        return round(100.0 * rank / len(values), 1)
+
+    def histogram(self, feature: str, bins: int = 28) -> dict:
+        """A binned view of the same distribution, for the strip chart."""
+        values = self.distributions[feature]["sorted"]
+        counts, edges = np.histogram(values, bins=bins)
+        return {"counts": counts.tolist(), "edges": [round(float(e), 2) for e in edges]}
 
     def encode(self, data: PredictionInput) -> np.ndarray:
         """Encode inputs using the SAME maps the model was trained with."""
@@ -345,19 +410,84 @@ def score_patient(data: PredictionInput) -> tuple[dict, float, str, list, bool]:
             "bmi": data.bmi,
             "avg_glucose_level": data.avg_glucose_level,
         },
+        # Where this patient sits in the training population. Answers the question a
+        # bare number cannot: is a glucose of 220 actually high, and compared to whom?
+        "percentiles": {
+            "age": ARTIFACT.percentile_of("age", float(data.age)),
+            "bmi": ARTIFACT.percentile_of("bmi", data.bmi),
+            "avg_glucose_level": ARTIFACT.percentile_of(
+                "avg_glucose_level", data.avg_glucose_level
+            ),
+        },
         "disclaimer": DISCLAIMER,
     }
     return body, score, band, top_features, flagged
 
 
+@app.get("/demo-patient")
+async def demo_patient():
+    """
+    A real record from the held-out test set, for the public demo to score.
+
+    Public, like /simulate. A visitor should be able to see what the model does before
+    being asked to create an account. The record is chosen at training time and shipped
+    inside the model artifact, so nothing here is a sample somebody made up.
+    """
+    if ARTIFACT is None:
+        raise HTTPException(status_code=503, detail="Model not loaded.")
+    return ARTIFACT.demo_patient
+
+
+@app.get("/distributions")
+async def distributions():
+    """The training distribution of each continuous feature, measured, not asserted."""
+    if ARTIFACT is None:
+        raise HTTPException(status_code=503, detail="Model not loaded.")
+    return {
+        name: {
+            "histogram": ARTIFACT.histogram(name),
+            "min": d["min"],
+            "max": d["max"],
+            "mean": round(d["mean"], 1),
+            "median": round(d["median"], 1),
+            "label": FEATURE_LABELS[name],
+        }
+        for name, d in ARTIFACT.distributions.items()
+    }
+
+
+@app.get("/threshold-curve")
+async def threshold_curve():
+    """
+    Recall and precision at every decision threshold, on the held-out test set.
+
+    The honest version of "how good is the model": lowering the threshold catches more
+    strokes AND raises more false alarms, and these are the real numbers for both.
+    """
+    if ARTIFACT is None:
+        raise HTTPException(status_code=503, detail="Model not loaded.")
+    return {
+        "points": ARTIFACT.threshold_curve,
+        "selected_threshold": ARTIFACT.threshold,
+        "selection_rule": "Youden's J (maximises sensitivity + specificity - 1)",
+        "n_test": ARTIFACT.n_test,
+    }
+
+
 @app.post("/simulate")
-async def simulate(data: PredictionInput, user: User = Depends(get_current_user)):
+async def simulate(data: PredictionInput):
     """
     A what-if run: identical scoring to /predict, but nothing is persisted.
 
     The UI lets you ask "what if I quit smoking?" and re-scores live. Those are
     hypotheticals, not assessments the user actually took, so writing them to
     history would pollute the very record /history exists to keep honest.
+
+    Deliberately open, no auth. It reads no user data, writes no row, and touches
+    no account, so there is nothing here to protect. Keeping it behind a login
+    would only mean a visitor has to create an account before the model will tell
+    them anything, which is what the public demo exists to avoid. /predict still
+    requires auth, because /predict is the one that saves.
     """
     if ARTIFACT is None:
         raise HTTPException(status_code=503, detail="Model not loaded.")

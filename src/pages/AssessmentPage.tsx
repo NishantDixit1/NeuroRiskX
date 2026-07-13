@@ -1,10 +1,10 @@
-import React, { lazy, Suspense, useEffect } from 'react';
-import { Info, Loader2 } from 'lucide-react';
+import React, { lazy, Suspense, useEffect, useState } from 'react';
+import { FlaskConical, Info, Loader2 } from 'lucide-react';
 import { PatientForm } from '../components/PatientForm';
 import { WhatIfPanel } from '../components/WhatIfPanel';
 import { predictionService } from '../services/api';
 import { useStore } from '../store/useStore';
-import { ModelInfo, PatientData, PredictionResult, RiskBand } from '../types';
+import { DemoPatient, ModelInfo, PatientData, PredictionResult, RiskBand } from '../types';
 
 const ResultsDashboard = lazy(() =>
   import('../components/ResultsDashboard').then((m) => ({ default: m.ResultsDashboard }))
@@ -115,7 +115,21 @@ const Spinner: React.FC<{ label: string }> = ({ label }) => (
   </div>
 );
 
-export const AssessmentPage: React.FC = () => {
+interface AssessmentPageProps {
+  /**
+   * Demo mode: score through /simulate instead of /predict, so a visitor gets the real
+   * model without an account and without writing a row. The intake is prefilled with a
+   * genuine held-out record fetched from /demo-patient.
+   */
+  demo?: boolean;
+  /** Rendered above the results in demo mode, to offer saving the run. */
+  demoCallout?: React.ReactNode;
+}
+
+export const AssessmentPage: React.FC<AssessmentPageProps> = ({
+  demo = false,
+  demoCallout = null,
+}) => {
   const {
     isLoading,
     error,
@@ -128,15 +142,30 @@ export const AssessmentPage: React.FC = () => {
     reset,
   } = useStore();
 
+  const [demoPatient, setDemoPatient] = useState<DemoPatient | null>(null);
+
   // Every model fact shown on this page is fetched, never typed in.
   useEffect(() => {
     void fetchModelInfo();
   }, [fetchModelInfo]);
 
+  // The demo's sample patient is a real record from the held-out test set, chosen at
+  // training time and served by the API. Inventing one here would be a made-up value.
+  useEffect(() => {
+    if (!demo) return;
+    predictionService
+      .getDemoPatient()
+      .then(setDemoPatient)
+      .catch(() => setDemoPatient(null));
+  }, [demo]);
+
+  const submit = (data: PatientData) => submitPatientData(data, { persist: !demo });
+
   if (predictionResult) {
     return (
       <Suspense fallback={<Spinner label="Loading your results..." />}>
         <div className="space-y-5">
+          {demoCallout}
           <ResultsDashboard
             result={predictionResult}
             modelInfo={modelInfo}
@@ -157,6 +186,16 @@ export const AssessmentPage: React.FC = () => {
 
   return (
     <div className="mx-auto max-w-3xl">
+      {demo && demoPatient && (
+        <div className="mb-6 flex items-start gap-2.5 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
+          <FlaskConical className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" aria-hidden="true" />
+          <p className="text-sm text-blue-900">
+            Prefilled with a real patient from the {demoPatient.source}. Change anything
+            you like, then score it. Nothing is saved.
+          </p>
+        </div>
+      )}
+
       {/* The intake step's single disclaimer, served by the API. On the results
           step, ResultsDashboard renders the result's own copy instead. */}
       {modelInfo && (
@@ -166,10 +205,14 @@ export const AssessmentPage: React.FC = () => {
         </div>
       )}
       <PatientForm
-        onSubmit={submitPatientData}
+        onSubmit={submit}
         isLoading={isLoading}
         error={error}
         onDismissError={() => setError(null)}
+        initialValues={
+          demo ? demoPatient : isCompleteIntake(patientData) ? patientData : null
+        }
+        submitLabel={demo ? 'Score this patient' : undefined}
       />
     </div>
   );
