@@ -1,6 +1,8 @@
 import React, { lazy, Suspense, useEffect, useState } from 'react';
 import { FlaskConical, Info, Loader2 } from 'lucide-react';
 import { PatientForm } from '../components/PatientForm';
+import { PopulationContext } from '../components/PopulationContext';
+import { ThresholdExplorer } from '../components/ThresholdExplorer';
 import { WhatIfPanel } from '../components/WhatIfPanel';
 import { predictionService } from '../services/api';
 import { useStore } from '../store/useStore';
@@ -179,6 +181,8 @@ export const AssessmentPage: React.FC<AssessmentPageProps> = ({
               onSimulate={predictionService.simulate}
             />
           )}
+          <PopulationContext result={predictionResult} />
+          <ThresholdExplorer result={predictionResult} />
         </div>
       </Suspense>
     );
