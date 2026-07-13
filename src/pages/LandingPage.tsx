@@ -578,6 +578,17 @@ export default function LandingPage({
           <p className="font-mono text-xs">
             Educational demo. Not a medical device. Not medical advice.
           </p>
+          <p className="text-xs">
+            Built by{' '}
+            <a
+              href="https://stackwrights.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-medium text-gray-700 underline underline-offset-2 hover:text-gray-900"
+            >
+              StackWrights
+            </a>
+          </p>
         </div>
       </footer>
     </div>
